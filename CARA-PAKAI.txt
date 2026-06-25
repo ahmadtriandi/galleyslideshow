@@ -1,0 +1,53 @@
+GALERI VIDEO + PANEL MODERATOR (VERSI PHP)
+============================================
+
+KEBUTUHAN
+- PHP 7.4+ (sudah termasuk di XAMPP, Laragon, MAMP, atau hosting cPanel).
+- Tidak perlu install apa pun lagi. Tidak perlu database.
+
+CARA MENJALANKAN
+
+A) Lewat XAMPP / Laragon (Windows)
+   1. Salin seluruh folder ini ke dalam folder "htdocs" (XAMPP)
+      atau "www" (Laragon). Misal: htdocs/video/
+   2. Jalankan Apache dari panel XAMPP/Laragon.
+   3. Buka browser:
+        Penonton  -> http://localhost/video/index.php
+        Moderator -> http://localhost/video/admin.php
+
+B) Lewat PHP bawaan (untuk uji cepat tanpa Apache)
+   1. Buka terminal di folder ini.
+   2. Jalankan:  php -S localhost:8080
+   3. Buka:
+        Penonton  -> http://localhost:8080/index.php
+        Moderator -> http://localhost:8080/admin.php
+
+C) Lewat hosting (cPanel / shared hosting)
+   - Upload semua file ke folder public_html (atau subfolder).
+   - Pastikan folder "videos" bisa ditulis (chmod 755 atau 775).
+   - Akses lewat domain Anda.
+
+LETAKKAN VIDEO
+- Taruh file .mp4 ke dalam folder "videos".
+- Halaman penonton otomatis cek video baru tiap 5 detik,
+  video baru diberi label "BARU".
+
+KONFIGURASI (edit file config.php)
+- VIDEO_DIR    : ganti lokasi folder video.
+- MOD_PASSWORD : WAJIB ganti dari 'admin123'.
+- HIDDEN_FILE  : lokasi penyimpan daftar video tersembunyi.
+
+FITUR MODERATOR
+- Login dengan password (memakai session PHP).
+- Sembunyikan / tampilkan video (file tidak dihapus).
+- Hapus video permanen dari folder.
+
+CATATAN KEAMANAN
+- Streaming sudah dilindungi dari path traversal (hanya .mp4 di
+  folder videos yang bisa diakses).
+- Untuk dipublikasikan ke internet: pakai HTTPS, ganti password,
+  dan pertimbangkan membatasi akses admin.php lewat .htaccess.
+
+CATATAN UPLOAD BESAR (jika nanti pakai fitur upload)
+- Atur di php.ini: upload_max_filesize & post_max_size sesuai
+  ukuran video maksimum.
