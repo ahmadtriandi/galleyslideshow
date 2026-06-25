@@ -9,7 +9,7 @@
   html, body { height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
 
   /* === Bagian ini IDENTIK dengan play-debug.php yang terbukti menampilkan video === */
-  #player {
+  #player, #imgPlayer {
     position: fixed; inset: 0;
     width: 100%; height: 100%;
     object-fit: contain;
@@ -61,6 +61,7 @@
 </head>
 <body>
 <video id="player" playsinline muted></video>
+<img id="imgPlayer" style="display:none">
 <button id="startBtn">&#9654; Mulai Putar</button>
 
 <div id="message">Belum ada video di folder.<br>Tambahkan file .mp4 lalu halaman ini akan otomatis memutarnya.</div>
@@ -83,6 +84,7 @@
 
 <script>
 const player  = document.getElementById('player');
+const imgPlayer = document.getElementById('imgPlayer');
 const startBtn= document.getElementById('startBtn');
 const message = document.getElementById('message');
 const topbar  = document.getElementById('topbar');
@@ -90,67 +92,195 @@ const controls= document.getElementById('controls');
 const titleEl = document.getElementById('title');
 const counter = document.getElementById('counter');
 
-let playlist = [];
-let current  = 0;
+let allItems = [];            // semua nama item yang valid saat ini (sesuai filter)
+let queue    = [];            // antrian acak yang akan diputar (diambil dari depan)
+let priority = [];            // antrian prioritas: item baru, menyela lebih dulu
+let currentName = null;       // nama item yang sedang tampil
 let loop     = true;
 let muted    = true;
+let typeOf   = {};            // peta nama file -> 'video' | 'image'
+let imgTimer = null;          // timer untuk gambar
+let paused   = false;         // status jeda (berlaku untuk gambar)
+const IMAGE_DURATION = 10000; // gambar tampil 10 detik
+
+// Acak array (Fisher-Yates)
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Isi ulang antrian dengan urutan acak baru (1 putaran)
+function refillQueue() {
+  queue = shuffle(allItems);
+}
 
 function srcOf(name){ return 'api.php?action=stream&name=' + encodeURIComponent(name); }
 
 async function fetchList() {
   try {
+    // Ambil filter aktif dari server (all | video | image)
+    let filter = 'all';
+    try {
+      const fres = await fetch('api.php?action=get_filter');
+      if (fres.ok) { const fd = await fres.json(); filter = fd.filter || 'all'; }
+    } catch {}
+
     const res = await fetch('api.php?action=videos');
     if (!res.ok) return [];
-    const videos = await res.json();
-    return Array.isArray(videos) ? videos.map(v => v.name) : [];
+    let videos = await res.json();
+    if (!Array.isArray(videos)) return [];
+    videos.forEach(v => { typeOf[v.name] = v.type || 'video'; });  // simpan tipe
+
+    // Saring sesuai filter moderator
+    if (filter === 'video' || filter === 'image') {
+      videos = videos.filter(v => (v.type || 'video') === filter);
+    }
+    return videos.map(v => v.name);
   } catch { return []; }
 }
 
 function updateInfo() {
-  if (!playlist.length) return;
-  titleEl.textContent = playlist[current];
-  counter.textContent = (current + 1) + ' / ' + playlist.length;
+  if (!currentName) return;
+  titleEl.textContent = currentName;
+  const sisa = priority.length + queue.length;
+  counter.textContent = 'Antrian tersisa: ' + sisa + ' • total ' + allItems.length;
 }
 
-function playIndex(i) {
-  if (!playlist.length) return;
-  current = (i + playlist.length) % playlist.length;
-  player.src = srcOf(playlist[current]);
-  player.muted = muted;
-  player.load();
-  const p = player.play();
-  if (p && p.catch) p.catch(() => { startBtn.style.display = 'block'; });
+function playItem(name) {
+  if (!name) return;
+  currentName = name;
+
+  // Bersihkan timer gambar sebelumnya bila ada
+  if (imgTimer) { clearTimeout(imgTimer); imgTimer = null; }
+
+  if (typeOf[name] === 'image') {
+    // ----- Tampilkan GAMBAR -----
+    player.pause();
+    player.style.display = 'none';
+    imgPlayer.src = srcOf(name);
+    imgPlayer.style.display = 'block';
+    startBtn.style.display = 'none';
+    if (!paused) imgTimer = setTimeout(next, IMAGE_DURATION);
+  } else {
+    // ----- Tampilkan VIDEO -----
+    imgPlayer.style.display = 'none';
+    imgPlayer.removeAttribute('src');
+    player.style.display = 'block';
+    player.src = srcOf(name);
+    player.muted = muted;
+    player.load();
+    const p = player.play();
+    if (p && p.catch) p.catch(() => { startBtn.style.display = 'block'; });
+  }
   updateInfo();
 }
 
+// Ambil item berikutnya: prioritaskan antrian 'priority', lalu 'queue'.
+// Saat queue habis → acak ulang (putaran baru).
 function next() {
-  if (current + 1 >= playlist.length && !loop) return;
-  playIndex(current + 1);
+  if (!allItems.length) return;
+
+  let name = null;
+  // 1) Item baru yang menyela
+  while (priority.length) {
+    const cand = priority.shift();
+    if (allItems.includes(cand)) { name = cand; break; }
+  }
+  // 2) Antrian acak normal
+  if (!name) {
+    while (queue.length) {
+      const cand = queue.shift();
+      if (allItems.includes(cand)) { name = cand; break; }
+    }
+  }
+  // 3) Queue habis → putaran baru (acak ulang)
+  if (!name) {
+    if (!loop) return;          // kalau loop mati, berhenti di akhir
+    refillQueue();
+    while (queue.length) {
+      const cand = queue.shift();
+      if (allItems.includes(cand)) { name = cand; break; }
+    }
+  }
+  if (name) playItem(name);
 }
-function prev() { playIndex(current - 1); }
+
+function prev() {
+  // 'Sebelumnya' pada mode acak: cukup acak satu item lain sebagai variasi
+  if (allItems.length) playItem(allItems[Math.floor(Math.random()*allItems.length)]);
+}
 
 player.addEventListener('ended', next);
 player.addEventListener('error', () => {
-  message.innerHTML = 'Gagal memuat: ' + (playlist[current]||'') + '<br><small>Lanjut berikutnya...</small>';
+  message.innerHTML = 'Gagal memuat: ' + (currentName||'') + '<br><small>Lanjut berikutnya...</small>';
+  message.style.display = 'flex';
+  setTimeout(() => { message.style.display = 'none'; next(); }, 1500);
+});
+imgPlayer.addEventListener('error', () => {
+  if (!allItems.length) return;
+  if (imgTimer) { clearTimeout(imgTimer); imgTimer = null; }
+  message.innerHTML = 'Gagal memuat: ' + (currentName||'') + '<br><small>Lanjut berikutnya...</small>';
   message.style.display = 'flex';
   setTimeout(() => { message.style.display = 'none'; next(); }, 1500);
 });
 
 async function init() {
-  playlist = await fetchList();
-  if (!playlist.length) { message.style.display = 'flex'; return; }
+  allItems = await fetchList();
+  if (!allItems.length) { message.style.display = 'flex'; return; }
   message.style.display = 'none';
-  playIndex(0);
+  refillQueue();           // acak putaran pertama
+  next();                  // mulai putar item pertama
 }
 
 setInterval(async () => {
   const fresh = await fetchList();
-  const before = playlist.length;
-  fresh.forEach(n => { if (!playlist.includes(n)) playlist.push(n); });
-  const playing = playlist[current];
-  playlist = playlist.filter(n => fresh.includes(n) || n === playing);
-  if (!playlist.length) { message.style.display = 'flex'; }
-  else if (before === 0) { message.style.display = 'none'; playIndex(0); }
+
+  if (!fresh.length) {                 // semua item hilang/disembunyikan/tersaring
+    allItems = []; queue = []; priority = []; currentName = null;
+    player.pause();
+    player.removeAttribute('src');
+    player.load();
+    imgPlayer.removeAttribute('src');
+    if (imgTimer) { clearTimeout(imgTimer); imgTimer = null; }
+    message.style.display = 'flex';
+    return;
+  }
+
+  const sebelumnyaKosong = allItems.length === 0;
+
+  // Deteksi item BARU (ada di fresh, belum dikenal sebelumnya)
+  const baru = fresh.filter(n => !allItems.includes(n));
+
+  // Perbarui daftar master
+  allItems = fresh;
+
+  // Bersihkan antrian dari item yang sudah tidak ada lagi
+  queue    = queue.filter(n => allItems.includes(n));
+  priority = priority.filter(n => allItems.includes(n));
+
+  // Item baru → masukkan ke antrian PRIORITAS (menyela setelah yang sekarang)
+  baru.forEach(n => { if (!priority.includes(n)) priority.push(n); });
+
+  if (sebelumnyaKosong) {
+    // Dari kosong → langsung mulai
+    message.style.display = 'none';
+    refillQueue();
+    next();
+    return;
+  }
+
+  // Kalau item yang SEDANG tampil sudah tidak ada (disembunyikan/dihapus/tersaring) → skip
+  if (currentName && !allItems.includes(currentName)) {
+    message.style.display = 'none';
+    next();
+    return;
+  }
+
+  message.style.display = 'none';
   updateInfo();
 }, 10000);
 
@@ -159,8 +289,23 @@ document.getElementById('btnPrev').onclick = prev;
 
 const btnPlay = document.getElementById('btnPlay');
 btnPlay.onclick = () => {
-  if (player.paused) { player.play(); btnPlay.innerHTML = '&#9208; Jeda'; }
-  else { player.pause(); btnPlay.innerHTML = '&#9654; Putar'; }
+  const isImage = typeOf[currentName] === 'image';
+  if (isImage) {
+    // Jeda/lanjut untuk GAMBAR (pakai timer)
+    if (paused) {
+      paused = false;
+      btnPlay.innerHTML = '&#9208; Jeda';
+      imgTimer = setTimeout(next, IMAGE_DURATION);   // lanjutkan hitung mundur
+    } else {
+      paused = true;
+      btnPlay.innerHTML = '&#9654; Putar';
+      if (imgTimer) { clearTimeout(imgTimer); imgTimer = null; }
+    }
+  } else {
+    // Jeda/lanjut untuk VIDEO
+    if (player.paused) { paused = false; player.play(); btnPlay.innerHTML = '&#9208; Jeda'; }
+    else { paused = true; player.pause(); btnPlay.innerHTML = '&#9654; Putar'; }
+  }
 };
 
 const btnMute = document.getElementById('btnMute');

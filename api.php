@@ -13,7 +13,12 @@ if ($action === 'stream') {
     $start = 0;
     $end = $size - 1;
 
-    header('Content-Type: video/mp4');
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    $mimes = [
+        'mp4'=>'video/mp4', 'jpg'=>'image/jpeg', 'jpeg'=>'image/jpeg',
+        'png'=>'image/png', 'gif'=>'image/gif', 'webp'=>'image/webp'
+    ];
+    header('Content-Type: ' . ($mimes[$ext] ?? 'application/octet-stream'));
     header('Accept-Ranges: bytes');
 
     if (isset($_SERVER['HTTP_RANGE'])) {
@@ -49,6 +54,12 @@ if ($action === 'videos') {
     exit;
 }
 
+// ---- Baca filter play.php (publik, agar play.php bisa membacanya) ----
+if ($action === 'get_filter') {
+    echo json_encode(['filter' => load_filter()]);
+    exit;
+}
+
 // ---- Login moderator ----
 if ($action === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $body = json_decode(file_get_contents('php://input'), true);
@@ -69,7 +80,7 @@ if ($action === 'logout') {
 }
 
 // ===== Mulai di sini wajib moderator =====
-if (in_array($action, ['admin_videos', 'toggle', 'delete'], true) && !is_moderator()) {
+if (in_array($action, ['admin_videos', 'toggle', 'delete', 'set_filter'], true) && !is_moderator()) {
     http_response_code(401);
     echo json_encode(['error' => 'Unauthorized']);
     exit;
@@ -78,6 +89,14 @@ if (in_array($action, ['admin_videos', 'toggle', 'delete'], true) && !is_moderat
 // ---- Daftar semua video (untuk moderator) ----
 if ($action === 'admin_videos') {
     echo json_encode(list_videos());
+    exit;
+}
+
+// ---- Set filter play.php (moderator) ----
+if ($action === 'set_filter' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $body = json_decode(file_get_contents('php://input'), true);
+    save_filter($body['filter'] ?? 'all');
+    echo json_encode(['ok' => true, 'filter' => load_filter()]);
     exit;
 }
 

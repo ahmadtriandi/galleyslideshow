@@ -27,6 +27,18 @@
   .tag-off { background: #7c2d12; color: #fdba74; }
   .err { color: #ef4444; font-size: 13px; }
 
+  /* Filter bar */
+  .filterbar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .filterlabel { color: #8b90a0; font-size: 13px; margin-right: 4px; }
+  .fbtn {
+    cursor: pointer; border: 1px solid #2d3340; border-radius: 8px;
+    padding: 7px 14px; font-size: 13px; font-weight: 600;
+    background: #181b22; color: #cfd3dd;
+  }
+  .fbtn:hover { border-color: #6b8afd; }
+  .fbtn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .filtercount { color: #8b90a0; font-size: 13px; margin-left: auto; }
+
   /* Thumbnail ringan: hanya menampilkan 1 frame video */
   .thumb {
     width: 120px; height: 68px; border-radius: 6px;
@@ -64,6 +76,13 @@
     <h1>🛠️ Panel Moderator</h1>
     <div><a href="index.php">← Halaman penonton</a> &nbsp; <button class="btn-hide" onclick="logout()">Keluar</button></div>
   </div>
+  <div class="filterbar">
+    <span class="filterlabel">Filter Putar Otomatis (play.php):</span>
+    <button class="fbtn active" data-filter="all" onclick="setFilter('all')">Semua</button>
+    <button class="fbtn" data-filter="video" onclick="setFilter('video')">Video (.mp4)</button>
+    <button class="fbtn" data-filter="image" onclick="setFilter('image')">Gambar (.jpg)</button>
+    <span class="filtercount" id="filtercount"></span>
+  </div>
   <table>
     <thead><tr><th>Preview</th><th>Nama</th><th>Status</th><th>Ukuran</th><th>Diunggah</th><th>Aksi</th></tr></thead>
     <tbody id="tbody"></tbody>
@@ -75,6 +94,7 @@
   <button class="close" onclick="closeModal(event,true)">✕</button>
   <div class="box" onclick="event.stopPropagation()">
     <video id="modalVideo" controls></video>
+    <img id="modalImage" style="display:none;max-width:80vw;max-height:80vh;border-radius:10px">
     <div class="cap" id="modalCap"></div>
   </div>
 </div>
@@ -107,17 +127,57 @@ function showPanel() {
 async function load() {
   const res = await fetch('api.php?action=admin_videos');
   if (res.status === 401) { document.getElementById('panel').style.display='none'; document.getElementById('loginView').style.display='block'; return; }
-  const videos = await res.json();
+  allVideos = await res.json();
+  render();
+  loadFilterStatus();
+}
+
+let allVideos = [];
+
+// Muat filter aktif dari server & tandai tombol yang sesuai
+async function loadFilterStatus() {
+  try {
+    const res = await fetch('api.php?action=get_filter');
+    const data = await res.json();
+    const f = data.filter || 'all';
+    document.querySelectorAll('.fbtn').forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === f);
+    });
+  } catch {}
+}
+
+// Simpan pilihan filter ke server (berlaku untuk play.php)
+async function setFilter(f) {
+  document.querySelectorAll('.fbtn').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === f);
+  });
+  try {
+    await fetch('api.php?action=set_filter', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ filter: f })
+    });
+  } catch {}
+}
+
+function render() {
   const tb = document.getElementById('tbody');
   tb.innerHTML = '';
-  videos.forEach(v => {
+  // Tabel moderator SELALU tampilkan semua (filter hanya untuk play.php)
+  const nVid = allVideos.filter(v => v.type === 'video').length;
+  const nImg = allVideos.filter(v => v.type === 'image').length;
+  document.getElementById('filtercount').textContent =
+    `Total ${nVid} video, ${nImg} gambar`;
+
+  allVideos.forEach(v => {
     const tr = document.createElement('tr');
     if (v.hidden) tr.className = 'hidden-row';
     const safe = v.name.replace(/'/g,"\\'");
-    // Thumbnail ringan: preload="metadata" + #t=0.5 → browser hanya ambil 1 frame, bukan seluruh video
-    const thumbSrc = 'api.php?action=stream&name=' + encodeURIComponent(v.name) + '#t=0.5';
+    const url = 'api.php?action=stream&name=' + encodeURIComponent(v.name);
+    const thumb = v.type === 'image'
+      ? `<img class="thumb" src="${url}" onclick="openModal('${safe}','image')">`
+      : `<video class="thumb" muted preload="metadata" src="${url}#t=0.5" onclick="openModal('${safe}','video')"></video>`;
     tr.innerHTML = `
-      <td><video class="thumb" muted preload="metadata" src="${thumbSrc}" onclick="openModal('${safe}')"></video></td>
+      <td>${thumb}</td>
       <td>${v.name}</td>
       <td><span class="tag ${v.hidden?'tag-off':'tag-on'}">${v.hidden?'Disembunyikan':'Tampil'}</span></td>
       <td>${fmtSize(v.size)}</td>
@@ -151,22 +211,32 @@ async function del(name) {
 fetch('api.php?action=admin_videos').then(r => { if (r.ok) showPanel(); });
 
 // ---- Popup preview ----
-function openModal(name) {
+function openModal(name, type) {
   const m = document.getElementById('modal');
   const vid = document.getElementById('modalVideo');
-  vid.src = 'api.php?action=stream&name=' + encodeURIComponent(name);
+  const img = document.getElementById('modalImage');
+  const url = 'api.php?action=stream&name=' + encodeURIComponent(name);
   document.getElementById('modalCap').textContent = name;
+  if (type === 'image') {
+    vid.pause(); vid.removeAttribute('src'); vid.style.display = 'none';
+    img.src = url; img.style.display = 'block';
+  } else {
+    img.removeAttribute('src'); img.style.display = 'none';
+    vid.src = url; vid.style.display = 'block';
+    vid.play().catch(()=>{});
+  }
   m.classList.add('show');
-  vid.play().catch(()=>{});
 }
 function closeModal(e, force) {
   // tutup hanya jika klik area gelap atau tombol ✕
   if (force || e.target.id === 'modal') {
     const m = document.getElementById('modal');
     const vid = document.getElementById('modalVideo');
+    const img = document.getElementById('modalImage');
     vid.pause();
     vid.removeAttribute('src');
     vid.load();
+    img.removeAttribute('src');
     m.classList.remove('show');
   }
 }

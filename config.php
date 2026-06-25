@@ -8,6 +8,9 @@ define('MOD_PASSWORD', 'admin123');
 
 // File penyimpan daftar video yang disembunyikan moderator.
 define('HIDDEN_FILE', __DIR__ . '/hidden.json');
+
+// File penyimpan filter play.php (all | video | image).
+define('FILTER_FILE', __DIR__ . '/filter.json');
 // ==========================
 
 // Mulai session untuk login moderator
@@ -27,15 +30,18 @@ function save_hidden($list) {
 function list_videos() {
     if (!is_dir(VIDEO_DIR)) @mkdir(VIDEO_DIR, 0775, true);
     $hidden = load_hidden();
+    $allowed = ['mp4', 'jpg', 'jpeg', 'png', 'gif', 'webp'];
     $out = [];
     foreach (scandir(VIDEO_DIR) as $f) {
-        if (strtolower(pathinfo($f, PATHINFO_EXTENSION)) !== 'mp4') continue;
+        $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
+        if (!in_array($ext, $allowed)) continue;
         $path = VIDEO_DIR . '/' . $f;
         $out[] = [
             'name'   => $f,
             'size'   => filesize($path),
             'mtime'  => filemtime($path) * 1000, // ke milidetik agar konsisten dgn JS
             'hidden' => in_array($f, $hidden, true),
+            'type'   => ($ext === 'mp4') ? 'video' : 'image',
         ];
     }
     // urutkan terbaru di atas
@@ -46,11 +52,24 @@ function list_videos() {
 // Validasi nama file agar aman dari path traversal
 function safe_video_path($name) {
     $name = basename($name); // buang komponen path
-    if (strtolower(pathinfo($name, PATHINFO_EXTENSION)) !== 'mp4') return null;
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    if (!in_array($ext, ['mp4','jpg','jpeg','png','gif','webp'])) return null;
     $path = VIDEO_DIR . '/' . $name;
     return file_exists($path) ? $path : null;
 }
 
 function is_moderator() {
     return !empty($_SESSION['is_mod']);
+}
+
+// Baca filter play.php; default 'all'. Nilai sah: all | video | image
+function load_filter() {
+    if (!file_exists(FILTER_FILE)) return 'all';
+    $v = trim(@file_get_contents(FILTER_FILE));
+    return in_array($v, ['all','video','image'], true) ? $v : 'all';
+}
+
+function save_filter($v) {
+    if (!in_array($v, ['all','video','image'], true)) $v = 'all';
+    file_put_contents(FILTER_FILE, $v);
 }
